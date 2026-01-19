@@ -1,5 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import User
+from django.db.models import Sum
+from django.utils import timezone
 
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
@@ -10,7 +12,7 @@ class UserProfile(models.Model):
     climate = models.CharField(max_length=20)
 
     def __str__(self):
-        return f"Profile of {self.user.username}"
+        return self.user.username
     
 class DailyWaterNorm(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -19,7 +21,6 @@ class DailyWaterNorm(models.Model):
 
     def calculate_norm(self):
         profile = UserProfile.objects.get(user=self.user)
-
         base = profile.weight * 30
 
         activity_map = {
@@ -38,20 +39,34 @@ class DailyWaterNorm(models.Model):
         climate_coef = climate_map.get(profile.climate, 1)
 
         return base * activity_coef * climate_coef
-    
+
     def save(self, *args, **kwargs):
         if not self.calculated_norm:
             self.calculated_norm = self.calculate_norm()
         super().save(*args, **kwargs)
+
+    def get_today_intake(self):
+        today = timezone.now().date()
+        total = WaterIntake.objects.filter(
+            user=self.user,
+            date=today
+        ).aggregate(Sum('amount'))['amount__sum']
+
+        return total or 0
+
+    def get_progress_percent(self):
+        if not self.calculated_norm:
+            return 0
+        return round((self.get_today_intake() / self.calculated_norm) * 100, 1)
 
     def __str__(self):
         return f"{self.user.username} - {self.calculated_norm:.0f} ml"
         
 class WaterIntake(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
-    amount = models.IntegerField(help_text="Amount of water in ml")
+    amount = models.IntegerField()
     intake_time = models.DateTimeField()
     date = models.DateField()
 
     def __str__(self):
-        return f"{self.amount} ml - {self.user.username}"
+        return f"{self.user.username} - {self.amount} ml"
